@@ -609,7 +609,7 @@ class Node {
     Static(C&&);
 
     std::variant<
-      std::function<void()>, std::function<void(Runtime&)>
+      std::function<void(bool&)>, std::function<void(Runtime&)>
     > work;
   };
 
@@ -746,6 +746,7 @@ class Node {
 
   std::atomic<int> _state {0};
   std::atomic<size_t> _join_counter {0};
+  std::atomic_flag is_scheduled {ATOMIC_FLAG_INIT};
 
   std::unique_ptr<Semaphores> _semaphores;
   std::exception_ptr _exception_ptr {nullptr};

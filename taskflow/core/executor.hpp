@@ -1083,7 +1083,7 @@ class Executor {
   void _increment_topology();
   void _decrement_topology();
   void _invoke(Worker&, Node*);
-  void _invoke_static_task(Worker&, Node*);
+  void _invoke_static_task(Worker&, Node*, bool& result);
   void _invoke_subflow_task(Worker&, Node*);
   void _detach_subflow_task(Worker&, Node*, Graph&);
   void _invoke_condition_task(Worker&, Node*, SmallVector<int>&);
@@ -1520,6 +1520,7 @@ inline void Executor::_invoke(Worker& worker, Node* node) {
   begin_invoke:
   
   SmallVector<int> conds;
+  bool result{false};
 
   // no need to do other things if the topology is cancelled
   if(node->_is_cancelled()) {
@@ -1544,7 +1545,7 @@ inline void Executor::_invoke(Worker& worker, Node* node) {
   switch(node->_handle.index()) {
     // static task
     case Node::STATIC:{
-      _invoke_static_task(worker, node);
+      _invoke_static_task(worker, node, result);
     }
     break;
 
@@ -1634,18 +1635,20 @@ inline void Executor::_invoke(Worker& worker, Node* node) {
       for(auto cond : conds) {
         if(cond >= 0 && static_cast<size_t>(cond) < node->_successors.size()) {
           auto s = node->_successors[cond];
-          // zeroing the join counter for invariant
-          s->_join_counter.store(0, std::memory_order_relaxed);
-          j.fetch_add(1, std::memory_order_relaxed);
-          if(s->_priority <= max_p) {
-            if(worker._cache) {
-              _schedule(worker, worker._cache);
+          if (!s->is_scheduled.test_and_set(std::memory_order_relaxed)) {
+            // zeroing the join counter for invariant
+            s->_join_counter.store(0, std::memory_order_relaxed);
+            j.fetch_add(1, std::memory_order_relaxed);
+            if(s->_priority <= max_p) {
+              if(worker._cache) {
+                _schedule(worker, worker._cache);
+              }
+              worker._cache = s;
+              max_p = s->_priority;
             }
-            worker._cache = s;
-            max_p = s->_priority;
-          }
-          else {
-            _schedule(worker, s);
+            else {
+              _schedule(worker, s);
+            }
           }
         }
       }
@@ -1654,20 +1657,24 @@ inline void Executor::_invoke(Worker& worker, Node* node) {
 
     // non-condition task
     default: {
-      for(size_t i=0; i<node->_successors.size(); ++i) {
-        //if(auto s = node->_successors[i]; --(s->_join_counter) == 0) {
-        if(auto s = node->_successors[i]; 
-          s->_join_counter.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-          j.fetch_add(1, std::memory_order_relaxed);
-          if(s->_priority <= max_p) {
-            if(worker._cache) {
-              _schedule(worker, worker._cache);
+      if (result) {
+        for(size_t i=0; i<node->_successors.size(); ++i) {
+          //if(auto s = node->_successors[i]; --(s->_join_counter) == 0) {
+          if(auto s = node->_successors[i]; 
+            s->_join_counter.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+            if (!s->is_scheduled.test_and_set(std::memory_order_relaxed)) {
+              j.fetch_add(1, std::memory_order_relaxed);
+              if(s->_priority <= max_p) {
+                if(worker._cache) {
+                  _schedule(worker, worker._cache);
+                }
+                worker._cache = s;
+                max_p = s->_priority;
+              }
+              else {
+                _schedule(worker, s);
+              }
             }
-            worker._cache = s;
-            max_p = s->_priority;
-          }
-          else {
-            _schedule(worker, s);
           }
         }
       }
@@ -1753,13 +1760,13 @@ inline void Executor::_process_exception(Worker&, Node* node) {
 }
 
 // Procedure: _invoke_static_task
-inline void Executor::_invoke_static_task(Worker& worker, Node* node) {
+inline void Executor::_invoke_static_task(Worker& worker, Node* node, bool& result) {
   _observer_prologue(worker, node);
   TF_EXECUTOR_EXCEPTION_HANDLER(worker, node, {
     auto& work = std::get_if<Node::Static>(&node->_handle)->work;
     switch(work.index()) {
       case 0:
-        std::get_if<0>(&work)->operator()();
+        std::get_if<0>(&work)->operator()(result);
       break;
 
       case 1:
@@ -2151,6 +2158,7 @@ inline void Executor::_set_up_graph(
     node->_topology = tpg;
     node->_parent = parent;
     node->_state.store(state, std::memory_order_relaxed);
+    node->is_scheduled.clear(std::memory_order_relaxed);
     if(node->num_dependents() == 0) {
       src.push_back(node);
     }

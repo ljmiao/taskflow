@@ -125,7 +125,7 @@ or std::function<void(tf::Runtime&)>.
 */
 template <typename C>
 constexpr bool is_static_task_v =
-  (std::is_invocable_r_v<void, C> || std::is_invocable_r_v<void, C, Runtime&>) &&
+  (std::is_invocable_r_v<void, C, bool&> || std::is_invocable_r_v<void, C, Runtime&>) &&
   !is_condition_task_v<C> &&
   !is_multi_condition_task_v<C> &&
   !is_subflow_task_v<C>;
