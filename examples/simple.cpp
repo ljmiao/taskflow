@@ -18,10 +18,10 @@ int main(){
   tf::Taskflow taskflow("simple");
 
   auto [A, B, C, D] = taskflow.emplace(
-    []() { std::cout << "TaskA\n"; },
-    []() { std::cout << "TaskB\n"; },
-    []() { std::cout << "TaskC\n"; },
-    []() { std::cout << "TaskD\n"; }
+    [](bool& result) { std::cout << "TaskA\n"; result = false;},
+    [](bool& result) { std::cout << "TaskB\n"; result = true;},
+    [](bool& result) { std::cout << "TaskC\n"; result = true;},
+    [](bool& result) { std::cout << "TaskD\n"; result = true;}
   );
 
   A.precede(B, C);  // A runs before B and C
